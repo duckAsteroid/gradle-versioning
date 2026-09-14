@@ -1,5 +1,5 @@
 ---
-description: "Computes project.version from git tags plus Conventional Commits messages, with per-module tag scoping for monorepos and no dependency on the java plugin."
+description: "Computes project.version from git tags plus Conventional Commits messages, with per-module tag scoping for monorepos. Applies axion-release internally and requires no other plugin."
 ---
 
 # Conventional Commits Versioning Plugin
@@ -14,8 +14,10 @@ plugins {
 
 Computes `project.version` by finding the last *final* release tag (plain `vX.Y.Z`, no suffix)
 reachable from `HEAD`, then bumping it according to the Conventional Commits messages since that
-tag that touched this module's own directory. Works in a plugins-only, source-free project - no
-`java` plugin required.
+tag that touched this module's own directory. Requires no upstream plugin for any language or
+toolchain - it applies [axion-release](https://github.com/allegro/axion-release-plugin) itself
+internally (for its tag-prefix scheme and the `-Prelease.forceVersion` backstop) and nothing else,
+so it works standalone on any Gradle project.
 
 ## Bump rules
 
