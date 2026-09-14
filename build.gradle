@@ -21,6 +21,29 @@ githubPackages {
     repository = 'gradle-versioning'
 }
 
+// This project IS a Gradle plugin, published via com.gradle.plugin-publish's own auto-generated
+// 'pluginMaven' publication - not a plain Java library. duckasteroid-java's 'mavenJava' publication
+// (from components.java) resolves to the exact same Maven coordinates (group:rootProject.name:version)
+// and races 'pluginMaven' to publish the same GAV - a hard 409 Conflict against GitHub Packages,
+// which won't let a second publish overwrite a version that already landed (confirmed by the first
+// real RC run on this branch). Since 'pluginMaven' is the correct/authoritative one here, skip
+// 'mavenJava' entirely rather than let them race - same fix, same reasoning, as
+// gradle-convention-plugin's own build.gradle for this exact conflict. Matching on the task NAME
+// (a plain String) rather than the task's own .publication property: gradle-convention-plugin ruled
+// out three config-cache-incompatible alternatives here already (see its build.gradle comment) -
+// reading .publication on these particular gradle-plugin-marker publish tasks isn't
+// config-cache-serializable.
+tasks.withType(PublishToMavenRepository).configureEach {
+    onlyIf("skip the mavenJava publication - pluginMaven is authoritative here") { t ->
+        !t.name.startsWith('publishMavenJavaPublicationTo')
+    }
+}
+tasks.withType(PublishToMavenLocal).configureEach {
+    onlyIf("skip the mavenJava publication - pluginMaven is authoritative here") { t ->
+        !t.name.startsWith('publishMavenJavaPublicationTo')
+    }
+}
+
 dependencies {
     // axion-release supplies the raw per-module tag-prefix scheme (scmVersion.tag) and is the
     // release.forceVersion backstop (scmVersion.getVersion()) - see VersionPlugin, which applies it
