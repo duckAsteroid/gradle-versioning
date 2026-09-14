@@ -5,6 +5,20 @@ plugins {
     id 'duckasteroid-java' version '1.4.0'
     id 'duckasteroid-release-flow' version '1.4.0'
     id 'io.github.duckasteroid.agent-docs.publish' version '3.0.0'
+    // No version here: io.github.duckasteroid.github-packages-settings (settings.gradle) already
+    // puts this plugin's jar on the build classpath at 0.2.0 - a version here conflicts with
+    // "plugin already on the classpath with an unknown version".
+    id 'io.github.duckasteroid.github-packages'
+}
+
+// Wires an authenticated GitHub Packages Maven repo into both dependency resolution and (since
+// maven-publish is already applied) publishing.repositories - without this, `publish` has nowhere
+// to go but mavenLocal, since duckasteroid-java doesn't configure a remote publishing repository
+// itself (unlike gradle-convention-plugin's own build.gradle, which points 'publish' at its own
+// GitHubPackages repo directly).
+githubPackages {
+    owner = 'duckAsteroid'
+    repository = 'gradle-versioning'
 }
 
 dependencies {

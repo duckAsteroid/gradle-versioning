@@ -41,10 +41,17 @@ jobs:
         with:
           fetch-depth: 0 # full tag + commit history needed to find the RC tag(s) to promote
 
+      # Hand-added: the templated single '17' (from duckasteroid.java.version) is this project's
+      # own compile target, but duckasteroid-java/-release-flow and agent-docs.publish's own
+      # buildscript classpath dependencies require JVM 21+ just to resolve/run, independent of
+      # what this project compiles to - matches build.yml/publish.yml's own JDK list.
+      # checkReleaseWorkflows will flag this file as edited-since-install; that's expected.
       - uses: actions/setup-java@v4
         with:
-          java-version: '17'
           distribution: 'temurin'
+          java-version: |
+            17
+            21
 
       - name: Validate Gradle wrapper
         uses: gradle/actions/wrapper-validation@v6
