@@ -1,0 +1,120 @@
+# duckasteroid-workflow-version: 1.4.0 sha256:7e40a3545ff9683d825caa201fd93d2a42c4ab9e22414c0167db30de80f69a10
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+#
+# Installed by the duckasteroid-release-flow Gradle plugin's installReleaseWorkflows task
+# (https://github.com/duckAsteroid/gradle-convention-plugin). Re-run installReleaseWorkflows
+# after upgrading the plugin to pick up template changes; if you've edited this file locally and
+# want to discard those edits in favor of the new template, add -Pduckasteroid.workflows.force=true.
+
+# Auto-bumps the release-candidate number on every push to `release`: tagReleaseCandidates loops
+# every project in the build that applies duckasteroid-release-flow, tags/pushes the next RC (and
+# generates that project's own changelog) for each one with qualifying commits since its last
+# release, skips the rest, and writes build/release-manifest.json - one {module, tag, changelog,
+# supersededTags} entry per project actually released. This job turns each manifest entry into its
+# own GitHub pre-release - attaching whatever jars sit in that entry's artifactsDir at release-creation
+# time, built fresh after tagging (see the "Build release artifacts" step below: the tag has to exist
+# first for the rebuilt jars to actually carry the release version rather than an ordinary "-SNAPSHOT"
+# one) - then deletes the GitHub Release (not the tag, not the published package) for every tag listed
+# in that entry's supersededTags - release candidates aren't permanent, so by default only the newest
+# one's Release stays visible (configurable via the releaseCandidates { } extension - see
+# VERSIONING.md). Works the same whether the repo releases as a single module or several
+# independently-versioned ones - see MULTI_MODULE_RELEASE_FLOW.md.
+#
+# Deliberately self-contained rather than relying on the tag push to trigger a separate publish
+# workflow: a tag pushed with the default GITHUB_TOKEN does not trigger other workflow runs, so
+# chaining into one here would silently never fire.
+name: Tag and publish release candidates
+on:
+  push:
+    branches:
+      - release
+jobs:
+  release-candidate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # needed to create the tag(s)/GitHub Release(s)
+      packages: write # needed to publish to GitHub Packages (and read duckasteroid-* plugins)
+    env:
+      # Every ./gradlew invocation below resolves duckasteroid-java/-release-flow from GitHub
+      # Packages at plugin-resolution time, not just the final publish - GITHUB_ACTOR is already in
+      # the default Actions env, GITHUB_TOKEN has to be exported explicitly.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full tag + commit history needed to derive versions
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v6
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      # tagReleaseCandidates creates annotated tags, which need a committer identity - the runner
+      # has none configured by default.
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Tag next release candidates
+        run: ./gradlew tagReleaseCandidates
+
+      # Runs in a fresh ./gradlew invocation, after tagging: project.version (and therefore the jar/
+      # sources/javadoc file names) is only computed once per invocation, and the earlier
+      # tagReleaseCandidates invocation had already fixed it to an ordinary "-SNAPSHOT" value before
+      # the tag above existed. This invocation sees the just-pushed tag on HEAD and resolves the real
+      # release version instead (VersionResolver.exactTagAt), so the jars built here are the ones
+      # actually attached to the GitHub Release below and pushed by "Publish package" further down.
+      - name: Build release artifacts
+        run: ./gradlew assemble
+
+      # One GitHub pre-release per build/release-manifest.json entry, with every jar found directly
+      # under that entry's artifactsDir (jar/sources/javadoc - see "Build release artifacts" above)
+      # attached as a release asset. An empty manifest (no project had qualifying commits since its
+      # last release) means the loop below simply does nothing - not an error.
+      - name: Create GitHub pre-releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          jq -c '.[]' build/release-manifest.json | while IFS= read -r entry; do
+            tag=$(jq -r '.tag' <<< "$entry")
+            changelog=$(jq -r '.changelog' <<< "$entry")
+            artifactsDir=$(jq -r '.artifactsDir' <<< "$entry")
+            assets=()
+            if [ -n "$artifactsDir" ] && [ -d "$artifactsDir" ]; then
+              while IFS= read -r -d '' f; do assets+=("$f"); done < <(find "$artifactsDir" -maxdepth 1 -type f -name '*.jar' -print0)
+            fi
+            gh release create "$tag" --notes-file "$changelog" --prerelease "${assets[@]}"
+          done
+
+      # supersededTags lists this cycle's previous RC tags the one just created replaces (see
+      # releaseCandidates { } and issue #6) - only the GitHub Release gets deleted, the tag and its
+      # already-published package are left alone (gh release delete without --cleanup-tag never
+      # touches the tag). Tolerant of a release that's already gone (e.g. deleted manually, or a
+      # previous run failed after tagging but before creating it) - this is cleanup, not a required
+      # step, so it warns rather than failing the job.
+      - name: Delete superseded release-candidate pre-releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          jq -r '.[] | .supersededTags[]' build/release-manifest.json | while IFS= read -r tag; do
+            gh release delete "$tag" --yes || echo "::warning::could not delete superseded release $tag (already gone?)"
+          done
+
+      # RCs are deliberately NOT pushed to the Gradle Plugin Portal - unlike the GitHub
+      # pre-release above (whose superseded entries get cleaned up) or the GitHub Packages
+      # 'publish' below, a Plugin Portal version is effectively permanent public metadata once
+      # published. Only promote-release.yml (final releases) runs publishPlugins.
+      - name: Publish package
+        uses: gradle/gradle-build-action@v2
+        with:
+          arguments: publish
