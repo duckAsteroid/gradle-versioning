@@ -3,6 +3,7 @@ plugins {
     id 'com.gradle.plugin-publish' version '2.0.0'
     id 'maven-publish'
     id 'duckasteroid-java' version '1.4.0'
+    id 'io.github.duckasteroid.agent-docs.publish' version '3.0.0'
 }
 
 dependencies {
