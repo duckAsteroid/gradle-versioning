@@ -1,0 +1,92 @@
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+#
+# Installed by the io.github.duckasteroid.release-flow Gradle plugin's installReleaseWorkflows task
+# (https://github.com/duckasteroid/gradle-versioning). Re-run installReleaseWorkflows after
+# upgrading the plugin to pick up template changes; if you've edited this file locally and want to
+# discard those edits in favor of the new template, add -Pduckasteroid.workflows.force=true.
+
+# Promotes every project's accepted release candidate to a final release on every push to `main`:
+# promoteReleaseCandidates loops every project in the build that applies
+# io.github.duckasteroid.release-flow, strips the -RCn suffix off each one's nearest reachable RC
+# tag (generating that project's own final-release changelog first), skips projects with no RC
+# pending, and writes build/release-manifest.json - one {module, tag, changelog, artifactsDir}
+# entry per project actually promoted. This job then turns each manifest entry into its own GitHub
+# Release, attaching whatever jars sit in artifactsDir at that point (built fresh after tagging -
+# see "Build release artifacts" below), all in the same job, for the same reason
+# release-candidate.yml is self-contained (a tag pushed with the default GITHUB_TOKEN doesn't
+# trigger other workflow runs). Works the same whether the repo releases as a single module or
+# several independently-versioned ones.
+name: Promote release candidates to final releases
+on:
+  push:
+    branches:
+      - main
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # needed to create the tag(s)/GitHub Release(s)
+      packages: write # needed if this project also publishes its own artifacts to GitHub Packages
+    env:
+      # io.github.duckasteroid.version/.release-flow themselves resolve from the public Gradle
+      # Plugin Portal - no token needed for that. GITHUB_TOKEN is still exported here in case this
+      # project applies any other GitHub-Packages-distributed plugin (or publishes its own artifacts
+      # there) - harmless to leave set even where nothing in a given build actually needs it.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full tag + commit history needed to find the RC tag(s) to promote
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '@@JAVA_VERSION@@'
+          distribution: 'temurin'
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v6
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      # promoteReleaseCandidates creates annotated tags, which need a committer identity - the
+      # runner has none configured by default.
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Promote release candidates to final
+        run: ./gradlew promoteReleaseCandidates
+
+      # Runs in a fresh ./gradlew invocation, after tagging - see the matching step/comment in
+      # release-candidate.yml for why this can't just reuse whatever tagReleaseCandidates already
+      # had lying around in build/libs.
+      - name: Build release artifacts
+        run: ./gradlew assemble
+
+      # One GitHub Release per build/release-manifest.json entry, with every jar found directly under
+      # that entry's artifactsDir attached as a release asset. An empty manifest (no project had a
+      # pending RC to promote) means the loop below simply does nothing - not an error.
+      - name: Create GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          jq -c '.[]' build/release-manifest.json | while IFS= read -r entry; do
+            tag=$(jq -r '.tag' <<< "$entry")
+            changelog=$(jq -r '.changelog' <<< "$entry")
+            artifactsDir=$(jq -r '.artifactsDir' <<< "$entry")
+            assets=()
+            if [ -n "$artifactsDir" ] && [ -d "$artifactsDir" ]; then
+              while IFS= read -r -d '' f; do assets+=("$f"); done < <(find "$artifactsDir" -maxdepth 1 -type f -name '*.jar' -print0)
+            fi
+            gh release create "$tag" --notes-file "$changelog" "${assets[@]}"
+          done
+
+      - name: Publish package
+        uses: gradle/gradle-build-action@v2
+        with:
+          arguments: publish

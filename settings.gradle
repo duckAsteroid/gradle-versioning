@@ -1,0 +1,17 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+
+plugins {
+    id 'io.github.duckasteroid.github-packages-settings' version '0.2.0'
+}
+
+githubPackages {
+    owner = 'duckAsteroid'
+    repository = 'gradle-convention-plugin'
+}
+
+rootProject.name = 'gradle-versioning'

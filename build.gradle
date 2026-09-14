@@ -1,0 +1,104 @@
+plugins {
+    id 'java-gradle-plugin'
+    id 'com.gradle.plugin-publish' version '2.0.0'
+    id 'maven-publish'
+    id 'duckasteroid-java' version '1.4.0'
+}
+
+dependencies {
+    // axion-release supplies the raw per-module tag-prefix scheme (scmVersion.tag) and is the
+    // release.forceVersion backstop (scmVersion.getVersion()) - see VersionPlugin, which applies it
+    // programmatically (project.getPluginManager().apply(...)). That requires depending on its
+    // MARKER artifact coordinate (<pluginId>:<pluginId>.gradle.plugin:<version>), not the raw
+    // group:artifact - the marker is what actually resolves the real implementation onto the
+    // runtime classpath so apply("pl.allegro.tech.build.axion-release") can find it. Same pattern
+    // gradle-convention-plugin's own root build.gradle uses for the exact same plugin.
+    implementation 'pl.allegro.tech.build.axion-release:pl.allegro.tech.build.axion-release.gradle.plugin:1.21.2'
+    // axion-release only exposes JGit on the runtime classpath, not compile - VersionResolver needs
+    // it directly to compile. Version pinned to what axion-release-plugin 1.21.2 already resolves
+    // transitively.
+    implementation 'org.eclipse.jgit:org.eclipse.jgit:7.4.0.202509020913-r'
+
+    testImplementation gradleTestKit()
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// ── Functional test source set ──────────────────────────────────────────────
+sourceSets {
+    functionalTest {
+        java.srcDir 'src/functionalTest/java'
+        resources.srcDir 'src/functionalTest/resources'
+        compileClasspath += sourceSets.main.output + configurations.testRuntimeClasspath
+        runtimeClasspath += output + compileClasspath
+    }
+}
+
+configurations {
+    functionalTestImplementation.extendsFrom testImplementation
+    functionalTestRuntimeOnly.extendsFrom testRuntimeOnly
+}
+
+def functionalTest = tasks.register('functionalTest', Test) {
+    description = 'Runs functional tests.'
+    group = 'verification'
+    testClassesDirs = sourceSets.functionalTest.output.classesDirs
+    classpath = sourceSets.functionalTest.runtimeClasspath
+    useJUnitPlatform()
+    shouldRunAfter test
+}
+
+tasks.named('check') {
+    dependsOn functionalTest
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+// Stamps the actual published plugin version into the bundled workflow-version.txt resource, read
+// at runtime by installReleaseWorkflows/checkReleaseWorkflows to know which version's marker to
+// write/compare against. Scoped to this one resource via filesMatching, deliberately NOT a blanket
+// expand() on all resources - the release-candidate.yml/promote-release.yml templates alongside it
+// contain live '${{ github.token }}'-style GitHub Actions expressions that must pass through
+// byte-for-byte, not be treated as Groovy GStrings.
+//
+// project.version isn't resolved to its real value until duckasteroid-java's afterEvaluate hook
+// runs, so it can't be read eagerly here at script-evaluation time - deferred to
+// project.afterEvaluate, same as that hook. The resolved String is captured into a local val and
+// handed to expand() as a plain value, rather than reading project.version from inside the
+// filesMatching { } action itself: filesMatching's action normally runs at task *execution* time,
+// and Task.project access there is unsupported under the configuration cache.
+project.afterEvaluate {
+    def resolvedVersion = project.version.toString()
+    tasks.named('processResources') {
+        filesMatching('io/github/duckasteroid/gradle/versioning/releaseflow/workflows/workflow-version.txt') {
+            expand(version: resolvedVersion)
+        }
+    }
+}
+
+// ── Plugin declarations ──────────────────────────────────────────────────────
+gradlePlugin {
+    website = 'https://github.com/duckasteroid/gradle-versioning'
+    vcsUrl  = 'https://github.com/duckasteroid/gradle-versioning'
+
+    testSourceSets sourceSets.functionalTest
+
+    plugins {
+        register('version') {
+            id                  = 'io.github.duckasteroid.version'
+            displayName         = 'Conventional Commits Versioning Plugin'
+            description         = 'Computes project.version from git tags plus Conventional Commits messages, independent of the java plugin.'
+            tags                = ['versioning', 'semantic-version', 'conventional-commits', 'release']
+            implementationClass = 'io.github.duckasteroid.gradle.versioning.VersionPlugin'
+        }
+        register('releaseFlow') {
+            id                  = 'io.github.duckasteroid.release-flow'
+            displayName         = 'Release Flow Plugin'
+            description         = 'Release-engineering tasks (RC tagging, promotion, changelog generation) for a develop/release/main git flow.'
+            tags                = ['versioning', 'release', 'changelog', 'ci']
+            implementationClass = 'io.github.duckasteroid.gradle.versioning.releaseflow.ReleaseFlowPlugin'
+        }
+    }
+}
