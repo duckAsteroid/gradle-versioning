@@ -30,6 +30,10 @@ so it works standalone on any Gradle project.
 - When several qualifying commits disagree, the highest-severity bump wins.
 - `HEAD` not sitting exactly on a release tag decorates the version with `-SNAPSHOT` (optionally
   with the sanitized branch name folded in on feature branches).
+- Merge commits themselves are excluded (mirrors `git log --no-merges`), since their
+  auto-generated "Merge branch 'x' into y" message would otherwise trip the non-conforming-commit
+  patch-bump fallback. The ordinary commits brought in *by* a merge are still walked and still
+  count - only the synthetic merge commit's own message is dropped.
 
 ## Tag scheme
 
