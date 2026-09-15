@@ -56,6 +56,15 @@ subproject in a monorepo can be versioned and released independently. A subproje
 its own yet falls back to the root's tag line, so a brand-new module inherits the current version
 instead of starting over at `0.0.0`.
 
+### Publishing project dependencies between independently versioned modules
+
+If `maven-publish` is also applied, every `MavenPublication`'s generated POM has its `<dependency>`
+entries fixed up automatically: a project dependency (`implementation project(':other-module')`) on
+another module that also applies `io.github.duckasteroid.version` is published using that module's
+last final release version, not its own possibly `-SNAPSHOT`-decorated `project.version` at the
+current `HEAD`. Nothing to configure - this only rewrites dependencies whose `groupId:artifactId`
+matches another project in the same build.
+
 ### Configuring which commit types bump what
 
 ```groovy
