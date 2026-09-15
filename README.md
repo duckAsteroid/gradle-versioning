@@ -7,7 +7,9 @@ adopted independently of one another and of any particular language toolchain.
 
 - 🔢 **`project.version` from git + Conventional Commits** - no manual version bumps, no
   hardcoded numbers in `build.gradle`
-- 🧩 **No `java` plugin required** - both plugins work in a plugins-only, source-free project
+- 🧩 **No upstream plugin required** - `io.github.duckasteroid.version` applies
+  [axion-release](https://github.com/allegro/axion-release-plugin) itself internally and needs
+  nothing else; both plugins work in a plugins-only, source-free project
 - 📁 **Per-module versioning in a monorepo** - each subproject that applies `io.github.duckasteroid.version`
   gets its own git-tag-based version line, scoped to commits that actually touched its own directory
 - 🚦 **`develop` → `release` → `main` release flow** - release-candidate tagging, promotion, and
@@ -16,6 +18,9 @@ adopted independently of one another and of any particular language toolchain.
   wiring for the flow above, with staleness detection so you know when your copy has drifted
 - 🧪 **Fully tested** - unit tests for the pure git/commit-parsing logic, functional (`GradleRunner`)
   tests for every task, including configuration-cache and multi-module scenarios
+- 🤖 **Agent docs bundled in the plugin jar** - each plugin ID ships its own
+  [Agent Docs](https://github.com/duckAsteroid/agent-docs) `SKILL.md`, so AI coding agents can pull
+  usage docs for whichever of these plugins a consuming project actually applies
 
 ## Two independent plugins
 
@@ -25,11 +30,12 @@ adopted independently of one another and of any particular language toolchain.
 | `io.github.duckasteroid.release-flow` | RC tagging, promotion, changelog generation, workflow install |
 
 `io.github.duckasteroid.release-flow` depends on `io.github.duckasteroid.version` being applied to
-the same project (it reuses its version computation for RC candidates) - but neither plugin
-depends on `java`, `java-gradle-plugin`, or any other language toolchain. The one exception is
-`installReleaseWorkflows`, which needs a java-toolchain-configuring plugin present so it knows what
-Java version to put in the installed workflow's `setup-java` step; every other task works in a
-project with no language plugin applied at all.
+the same project (it reuses its version computation for RC candidates). `io.github.duckasteroid.version`
+itself requires no upstream plugin at all - it applies axion-release internally and nothing else, so
+it works standalone on any Gradle project. `io.github.duckasteroid.release-flow` inherits that
+same freedom, with one exception: `installReleaseWorkflows` needs a java-toolchain-configuring
+plugin present so it knows what Java version to put in the installed workflow's `setup-java` step;
+every other task works in a project with no language plugin applied at all.
 
 ## `io.github.duckasteroid.version`
 

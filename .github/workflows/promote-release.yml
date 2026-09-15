@@ -1,0 +1,107 @@
+# duckasteroid-workflow-version: 1.4.0 sha256:00fbefe098f7c7648229d6776747600d7bf7cb530d35f600d5b8f77843dd9689
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+#
+# Installed by the duckasteroid-release-flow Gradle plugin's installReleaseWorkflows task
+# (https://github.com/duckAsteroid/gradle-convention-plugin). Re-run installReleaseWorkflows
+# after upgrading the plugin to pick up template changes; if you've edited this file locally and
+# want to discard those edits in favor of the new template, add -Pduckasteroid.workflows.force=true.
+
+# Promotes every project's accepted release candidate to a final release on every push to `main`:
+# promoteReleaseCandidates loops every project in the build that applies duckasteroid-release-flow,
+# strips the -RCn suffix off each one's nearest reachable RC tag (generating that project's own
+# final-release changelog first), skips projects with no RC pending, and writes
+# build/release-manifest.json - one {module, tag, changelog, artifactsDir} entry per project actually
+# promoted. This job then turns each manifest entry into its own GitHub Release, attaching whatever
+# jars sit in artifactsDir at that point (built fresh after tagging - see "Build release artifacts"
+# below), all in the same job, for the same reason release-candidate.yml is self-contained (a tag
+# pushed with the default GITHUB_TOKEN doesn't trigger other workflow runs). Works the same whether
+# the repo releases as a single module or several independently-versioned ones - see
+# MULTI_MODULE_RELEASE_FLOW.md.
+name: Promote release candidates to final releases
+on:
+  push:
+    branches:
+      - main
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # needed to create the tag(s)/GitHub Release(s)
+      packages: write # needed to publish to GitHub Packages (and read duckasteroid-* plugins)
+    env:
+      # Every ./gradlew invocation below resolves duckasteroid-java/-release-flow from GitHub
+      # Packages at plugin-resolution time, not just the final publish - GITHUB_ACTOR is already in
+      # the default Actions env, GITHUB_TOKEN has to be exported explicitly.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full tag + commit history needed to find the RC tag(s) to promote
+
+      # Hand-added: the templated single '17' (from duckasteroid.java.version) is this project's
+      # own compile target, but duckasteroid-java/-release-flow and agent-docs.publish's own
+      # buildscript classpath dependencies require JVM 21+ just to resolve/run, independent of
+      # what this project compiles to - matches build.yml/publish.yml's own JDK list.
+      # checkReleaseWorkflows will flag this file as edited-since-install; that's expected.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: |
+            17
+            21
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v6
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      # promoteReleaseCandidates creates annotated tags, which need a committer identity - the
+      # runner has none configured by default.
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Promote release candidates to final
+        run: ./gradlew promoteReleaseCandidates
+
+      # Runs in a fresh ./gradlew invocation, after tagging - see the matching step/comment in
+      # release-candidate.yml for why this can't just reuse whatever tagReleaseCandidates already
+      # had lying around in build/libs.
+      - name: Build release artifacts
+        run: ./gradlew assemble
+
+      # One GitHub Release per build/release-manifest.json entry, with every jar found directly under
+      # that entry's artifactsDir attached as a release asset. An empty manifest (no project had a
+      # pending RC to promote) means the loop below simply does nothing - not an error.
+      - name: Create GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          jq -c '.[]' build/release-manifest.json | while IFS= read -r entry; do
+            tag=$(jq -r '.tag' <<< "$entry")
+            changelog=$(jq -r '.changelog' <<< "$entry")
+            artifactsDir=$(jq -r '.artifactsDir' <<< "$entry")
+            assets=()
+            if [ -n "$artifactsDir" ] && [ -d "$artifactsDir" ]; then
+              while IFS= read -r -d '' f; do assets+=("$f"); done < <(find "$artifactsDir" -maxdepth 1 -type f -name '*.jar' -print0)
+            fi
+            gh release create "$tag" --notes-file "$changelog" "${assets[@]}"
+          done
+
+      # Hand-added: the duckasteroid-release-flow template only runs 'publish' (GitHub Packages),
+      # which is correct for GH-Packages-only projects but wrong here - the Gradle Plugin Portal is
+      # this project's actual distribution channel for io.github.duckasteroid.version/.release-flow,
+      # so publishPlugins has to run too or a final release never actually reaches consumers.
+      # checkReleaseWorkflows will flag this file as edited-since-install; that's expected.
+      - name: Publish package
+        uses: gradle/gradle-build-action@v2
+        env:
+          GRADLE_PUBLISH_KEY: ${{ secrets.GRADLE_PUBLISH_KEY }}
+          GRADLE_PUBLISH_SECRET: ${{ secrets.GRADLE_PUBLISH_SECRET }}
+        with:
+          arguments: publish publishPlugins

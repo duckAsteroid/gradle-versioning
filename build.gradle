@@ -3,6 +3,45 @@ plugins {
     id 'com.gradle.plugin-publish' version '2.0.0'
     id 'maven-publish'
     id 'duckasteroid-java' version '1.4.0'
+    id 'duckasteroid-release-flow' version '1.4.0'
+    id 'io.github.duckasteroid.agent-docs.publish' version '3.0.0'
+    // No version here: io.github.duckasteroid.github-packages-settings (settings.gradle) already
+    // puts this plugin's jar on the build classpath at 0.2.0 - a version here conflicts with
+    // "plugin already on the classpath with an unknown version".
+    id 'io.github.duckasteroid.github-packages'
+}
+
+// Wires an authenticated GitHub Packages Maven repo into both dependency resolution and (since
+// maven-publish is already applied) publishing.repositories - without this, `publish` has nowhere
+// to go but mavenLocal, since duckasteroid-java doesn't configure a remote publishing repository
+// itself (unlike gradle-convention-plugin's own build.gradle, which points 'publish' at its own
+// GitHubPackages repo directly).
+githubPackages {
+    owner = 'duckAsteroid'
+    repository = 'gradle-versioning'
+}
+
+// This project IS a Gradle plugin, published via com.gradle.plugin-publish's own auto-generated
+// 'pluginMaven' publication - not a plain Java library. duckasteroid-java's 'mavenJava' publication
+// (from components.java) resolves to the exact same Maven coordinates (group:rootProject.name:version)
+// and races 'pluginMaven' to publish the same GAV - a hard 409 Conflict against GitHub Packages,
+// which won't let a second publish overwrite a version that already landed (confirmed by the first
+// real RC run on this branch). Since 'pluginMaven' is the correct/authoritative one here, skip
+// 'mavenJava' entirely rather than let them race - same fix, same reasoning, as
+// gradle-convention-plugin's own build.gradle for this exact conflict. Matching on the task NAME
+// (a plain String) rather than the task's own .publication property: gradle-convention-plugin ruled
+// out three config-cache-incompatible alternatives here already (see its build.gradle comment) -
+// reading .publication on these particular gradle-plugin-marker publish tasks isn't
+// config-cache-serializable.
+tasks.withType(PublishToMavenRepository).configureEach {
+    onlyIf("skip the mavenJava publication - pluginMaven is authoritative here") { t ->
+        !t.name.startsWith('publishMavenJavaPublicationTo')
+    }
+}
+tasks.withType(PublishToMavenLocal).configureEach {
+    onlyIf("skip the mavenJava publication - pluginMaven is authoritative here") { t ->
+        !t.name.startsWith('publishMavenJavaPublicationTo')
+    }
 }
 
 dependencies {
