@@ -5,8 +5,11 @@ import org.eclipse.jgit.lib.RepositoryBuilder;
 import org.gradle.api.Plugin;
 import org.gradle.api.Project;
 import org.gradle.api.plugins.ExtraPropertiesExtension;
+import org.gradle.api.publish.PublishingExtension;
+import org.gradle.api.publish.maven.MavenPublication;
 import pl.allegro.tech.build.axion.release.domain.VersionConfig;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -111,6 +114,48 @@ public class VersionPlugin implements Plugin<Project> {
         ExtraPropertiesExtension ext = project.getExtensions().getExtraProperties();
         ext.set("tagPrefix", customPrefix);
         ext.set("modulePath", modulePath);
+
+        // The last final release version reachable from HEAD (plain "X.Y.Z", never decorated with
+        // "-SNAPSHOT"/branch) - computed synchronously here (not deferred to afterEvaluate, unlike
+        // project.version above) precisely so OTHER projects in the same build can read it back via
+        // ext during their own configuration without an evaluation-order dependency. Used below to
+        // fix https://github.com/duckAsteroid/gradle-versioning/issues/2: a project dependency on
+        // this module from elsewhere in the build should publish this value, not this module's own
+        // possibly-SNAPSHOT-decorated project.version.
+        ext.set("releaseVersion", releaseVersion(project, customPrefix));
+
+        // Reactive, not a hard dependency: only wires in if the consumer applies maven-publish
+        // themselves (matches this plugin's "no dependency on java/publishing plugins" design - see
+        // class doc comment). Every sibling project's ext.releaseVersion is captured as a plain
+        // Map<String, String> from a rootProject.getGradle().projectsEvaluated(...) callback (the
+        // same config-cache-safe snapshot pattern ReleaseFlowPlugin uses for its Target list) so the
+        // POM-rewriting action below never closes over a live Project reference.
+        project.getPluginManager().withPlugin("maven-publish", unused -> {
+            Map<String, String> releaseVersionsByGav = new HashMap<>();
+            project.getRootProject().getGradle().projectsEvaluated(gradle -> {
+                for (Project sibling : project.getRootProject().getAllprojects()) {
+                    ExtraPropertiesExtension siblingExt = sibling.getExtensions().getExtraProperties();
+                    if (siblingExt.has("releaseVersion")) {
+                        releaseVersionsByGav.put(sibling.getGroup() + ":" + sibling.getName(),
+                                (String) siblingExt.get("releaseVersion"));
+                    }
+                }
+            });
+            project.getExtensions().configure(PublishingExtension.class, publishing ->
+                    publishing.getPublications().withType(MavenPublication.class).configureEach(mavenPublication ->
+                            mavenPublication.getPom().withXml(xml ->
+                                    ProjectDependencyVersionRewriter.rewrite(xml.asElement(), releaseVersionsByGav))));
+        });
+    }
+
+    private static String releaseVersion(Project project, String tagPrefix) {
+        try {
+            return VersionResolver.lastFinalVersion(project.getProjectDir(), tagPrefix, List.of("v"));
+        } catch (Exception ignored) {
+            // No real git checkout to read (e.g. an in-memory ProjectBuilder test project) - same
+            // fallback rationale as resolveScmDerivedVersion below.
+            return "0.0.0";
+        }
     }
 
     private static String customTagPrefix(Project project) {
